@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Patch vaxis Parser.zig to handle CSI Z (legacy shift+tab / backtab)
+# See: https://github.com/rockorager/libvaxis/issues/266
+VAXIS_DIR=$(find "$HOME/.cache/zig/p" -maxdepth 1 -name 'vaxis-*' -type d | head -1)
+if [ -z "$VAXIS_DIR" ]; then
+  echo "vaxis not found in zig cache, running zig build to fetch deps..."
+  zig build 2>/dev/null || true
+  VAXIS_DIR=$(find "$HOME/.cache/zig/p" -maxdepth 1 -name 'vaxis-*' -type d | head -1)
+fi
+
+if [ -n "$VAXIS_DIR" ] && ! grep -q "'Z' =>" "$VAXIS_DIR/src/Parser.zig"; then
+  echo "Patching vaxis for CSI Z (shift+tab)..."
+  patch -p1 -d "$VAXIS_DIR" < patches/vaxis-csi-z-backtab.patch
+fi
+
+zig build "$@"
+
+echo "Signing binary..."
+codesign --force --sign - zig-out/bin/focus
+echo "Installing to ~/.local/bin/focus..."
+cp -f zig-out/bin/focus "$HOME/.local/bin/focus"
+echo "Done."
