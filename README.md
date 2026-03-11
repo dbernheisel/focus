@@ -14,6 +14,12 @@ A terminal UI for viewing your assigned Linear and Notion issues, keeping you fo
 - Open issues in browser (or Linear desktop app) with `o`
 - JSON list mode for scripting (`--list`)
 
+![List issues](./list-issues.png)
+
+![View issue](./view-issue.png)
+
+![Create issue](./create-issue.png)
+
 ## Prerequisites
 
 - [Zig 0.15+](https://ziglang.org/download/)
