@@ -115,7 +115,7 @@ zig-out/bin/focus
 Run directly:
 
 ```sh
-zig build run
+bin/build
 ```
 
 Run tests:
