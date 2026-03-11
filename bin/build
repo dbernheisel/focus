@@ -3,7 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-OUTPUT_DIR=${1:-"$HOME/.local/bin"}
+OUTPUT_DIR=${1:-"zig-out/bin"}; 
+shift || true
 
 # Patch vaxis Parser.zig to handle CSI Z (legacy shift+tab / backtab)
 # See: https://github.com/rockorager/libvaxis/issues/266
@@ -26,5 +27,9 @@ if type codesign &>/dev/null; then
   codesign --force --sign - zig-out/bin/focus
 fi
 
-echo "Installing to $OUTPUT_DIR/focus..."
-cp -f zig-out/bin/focus "$OUTPUT_DIR/focus"
+if ! [ $OUTPUT_DIR = "zig-out/bin" ]; then 
+  echo "Installing to $OUTPUT_DIR/focus..."
+  cp -vf zig-out/bin/focus "$OUTPUT_DIR/focus"
+fi
+
+echo "Built: $OUTPUT_DIR/focus"
