@@ -22,14 +22,14 @@ fi
 
 zig build "$@"
 
-echo "Signing binary..."
-if type codesign &>/dev/null; then
-  codesign --force --sign - zig-out/bin/focus
-fi
-
-if ! [ $OUTPUT_DIR = "zig-out/bin" ]; then 
+if ! [ "$OUTPUT_DIR" = "zig-out/bin" ]; then
   echo "Installing to $OUTPUT_DIR/focus..."
   cp -vf zig-out/bin/focus "$OUTPUT_DIR/focus"
+fi
+
+echo "Signing binary..."
+if type codesign &>/dev/null; then
+  codesign --force --sign - "$OUTPUT_DIR/focus"
 fi
 
 echo "Built: $OUTPUT_DIR/focus"

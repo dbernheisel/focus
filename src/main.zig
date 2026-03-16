@@ -178,9 +178,12 @@ fn cleanupState(allocator: std.mem.Allocator, app_state: *state_mod.State) void 
         allocator.free(app_state.teams);
     }
 
-    // Free viewer_id
-    if (app_state.viewer_id) |vid| {
-        allocator.free(vid);
+    // Free viewer_ids
+    for (&app_state.viewer_ids) |*vid| {
+        if (vid.*) |v| {
+            allocator.free(v);
+            vid.* = null;
+        }
     }
 
     // Free team states

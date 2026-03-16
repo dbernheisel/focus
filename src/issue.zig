@@ -38,6 +38,16 @@ pub const PriorityLabel = enum {
         };
     }
 
+    pub fn sortOrder(self: PriorityLabel) u8 {
+        return switch (self) {
+            .urgent => 0,
+            .high => 1,
+            .medium => 2,
+            .none => 3,
+            .low => 4,
+        };
+    }
+
     pub fn fromString(s: ?[]const u8) PriorityLabel {
         const val = s orelse return .none;
         if (std.mem.eql(u8, val, "Urgent")) return .urgent;
@@ -68,6 +78,8 @@ pub const Issue = struct {
     source_id: ?[]const u8 = null,
     source_url: ?[]const u8 = null,
     source_workspace_idx: ?usize = null,
+    project_name: ?[]const u8 = null,
+    milestone_name: ?[]const u8 = null,
 
     pub fn key(self: Issue) []const u8 {
         return self.source_id orelse self.identifier;
@@ -99,6 +111,8 @@ pub fn freeIssue(allocator: std.mem.Allocator, iss: Issue) void {
     }
     if (iss.source_id) |s| allocator.free(s);
     if (iss.source_url) |u| allocator.free(u);
+    if (iss.project_name) |p| allocator.free(p);
+    if (iss.milestone_name) |m| allocator.free(m);
 }
 
 /// Free every issue's strings in a slice, then free the slice itself.
@@ -138,6 +152,13 @@ test "priority icons are correct" {
     try testing.expectEqualStrings("-", PriorityLabel.medium.icon());
     try testing.expectEqualStrings("↓", PriorityLabel.low.icon());
     try testing.expectEqualStrings(" ", PriorityLabel.none.icon());
+}
+
+test "PriorityLabel.sortOrder matches urgent→high→medium→none→low" {
+    try testing.expect(PriorityLabel.urgent.sortOrder() < PriorityLabel.high.sortOrder());
+    try testing.expect(PriorityLabel.high.sortOrder() < PriorityLabel.medium.sortOrder());
+    try testing.expect(PriorityLabel.medium.sortOrder() < PriorityLabel.none.sortOrder());
+    try testing.expect(PriorityLabel.none.sortOrder() < PriorityLabel.low.sortOrder());
 }
 
 test "PriorityLabel.fromString parses correctly" {

@@ -64,6 +64,8 @@ pub const TeamStateEntry = struct {
 };
 
 pub const State = struct {
+    const max_workspaces = 8;
+
     mode: Mode = .list,
     issues: []Issue = &.{},
     selected_index: usize = 0,
@@ -74,7 +76,7 @@ pub const State = struct {
     error_msg: ?[]const u8 = null,
     editing_status: ?StatusEdit = null,
     teams: []event_mod.Team = &.{},
-    viewer_id: ?[]const u8 = null,
+    viewer_ids: [max_workspaces]?[]const u8 = .{null} ** max_workspaces,
     rows: u16 = 24,
     cols: u16 = 80,
     create_form: ?CreateForm = null,
@@ -412,9 +414,12 @@ fn handleIssuesFetched(s: State, payload: anytype) UpdateResult {
                 // Free the new_issues slice container (elements are now in merged)
                 alloc.free(new_issues);
 
-                // Sort: workspace ascending, then updated_at descending
+                // Sort: priority (urgent→high→medium→none→low), then workspace ascending, then updated_at descending
                 std.mem.sort(Issue, merged[0..idx], {}, struct {
                     fn cmp(_: void, a: Issue, b: Issue) bool {
+                        const a_pri = a.priority_label.sortOrder();
+                        const b_pri = b.priority_label.sortOrder();
+                        if (a_pri != b_pri) return a_pri < b_pri;
                         const a_ws = a.source_workspace_idx orelse 0;
                         const b_ws = b.source_workspace_idx orelse 0;
                         if (a_ws != b_ws) return a_ws < b_ws;
@@ -567,8 +572,11 @@ fn handleTeamsFetched(s: State, payload: anytype) UpdateResult {
         .ok => |data| {
             var next = s;
             next.error_msg = null;
-            if (next.viewer_id == null) {
-                next.viewer_id = data.viewer_id;
+            if (payload.workspace_idx < State.max_workspaces) {
+                if (next.viewer_ids[payload.workspace_idx]) |old| {
+                    if (next.allocator) |alloc| alloc.free(old);
+                }
+                next.viewer_ids[payload.workspace_idx] = data.viewer_id;
             } else if (next.allocator) |alloc| {
                 alloc.free(data.viewer_id);
             }
@@ -1068,7 +1076,10 @@ fn handleCreateKey(s: State, key: Key) UpdateResult {
             break :blk null;
         };
 
-        const assignee_id: ?[]const u8 = if (form.assign_self) next.viewer_id else null;
+        const assignee_id: ?[]const u8 = if (form.assign_self and team.workspace_idx < State.max_workspaces)
+            next.viewer_ids[team.workspace_idx]
+        else
+            null;
         const api_key = if (team.workspace_idx < next.linear_api_keys.len)
             next.linear_api_keys[team.workspace_idx]
         else
@@ -1707,7 +1718,7 @@ test "teams_fetched stores teams and viewer_id" {
     } });
     try testing.expectEqual(@as(usize, 1), result.state.teams.len);
     try testing.expectEqualStrings("t1", result.state.teams[0].id);
-    try testing.expectEqualStrings("user1", result.state.viewer_id.?);
+    try testing.expectEqualStrings("user1", result.state.viewer_ids[0].?);
 }
 
 test "team_states_fetched stores states" {
@@ -1908,6 +1919,8 @@ test "refresh: teams merge from two workspaces" {
     } });
     s = result.state;
     try testing.expectEqual(@as(usize, 3), s.teams.len); // t1, t2, t3
+    try testing.expectEqualStrings("u1", s.viewer_ids[0].?);
+    try testing.expectEqualStrings("u1dup", s.viewer_ids[1].?);
 
     // Cleanup — all memory properly owned by state now
     for (s.teams) |team| {
@@ -1916,5 +1929,7 @@ test "refresh: teams merge from two workspaces" {
         alloc.free(team.key);
     }
     alloc.free(s.teams);
-    if (s.viewer_id) |vid| alloc.free(vid);
+    for (&s.viewer_ids) |*vid| {
+        if (vid.*) |v| alloc.free(v);
+    }
 }

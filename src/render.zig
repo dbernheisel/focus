@@ -167,6 +167,26 @@ fn renderIssueRow(win: Window, iss: *const issue_mod.Issue, row: u16, selected: 
         const avail = win.width - title_col;
         const title_len = @min(iss.title.len, avail);
         printSeg(win, iss.title[0..title_len], style, row, title_col);
+
+        // Show project/milestone as dimmed tags after title
+        var tag_col: u16 = title_col + @as(u16, @intCast(title_len)) + 1;
+        const tag_style: Style = if (selected) style_reverse else style_dim;
+
+        if (iss.project_name) |proj| {
+            if (tag_col + 2 < win.width) {
+                const tag_avail = win.width - tag_col;
+                const proj_len = @min(proj.len, tag_avail);
+                printSeg(win, proj[0..proj_len], tag_style, row, tag_col);
+                tag_col += @as(u16, @intCast(proj_len)) + 1;
+            }
+        }
+        if (iss.milestone_name) |ms| {
+            if (tag_col + 2 < win.width) {
+                const tag_avail = win.width - tag_col;
+                const ms_len = @min(ms.len, tag_avail);
+                printSeg(win, ms[0..ms_len], tag_style, row, tag_col);
+            }
+        }
     }
 }
 
@@ -202,12 +222,29 @@ fn renderDetail(s: *const State, win: Window) void {
         printSeg(win, "  Status: ", style_dim, 1, 0);
         printSeg(win, iss.state_name, style_dim, 1, 10);
 
+        var meta_col: u16 = 10 + @as(u16, @intCast(@min(iss.state_name.len, std.math.maxInt(u16)))) + 2;
+
         if (iss.priority_label != .none) {
-            const state_len: u16 = @intCast(@min(iss.state_name.len, std.math.maxInt(u16)));
-            const prio_col: u16 = 10 + state_len + 2;
-            printSeg(win, "Priority: ", style_dim, 1, prio_col);
+            printSeg(win, "Priority: ", style_dim, 1, meta_col);
             const icon = iss.priority_label.icon();
-            printSeg(win, icon, style_dim, 1, prio_col + 10);
+            printSeg(win, icon, style_dim, 1, meta_col + 10);
+            meta_col += 12;
+        }
+
+        if (iss.project_name) |proj| {
+            if (meta_col + 2 < win.width) {
+                const avail = win.width - meta_col;
+                const proj_len = @min(proj.len, avail);
+                printSeg(win, proj[0..proj_len], style_dim, 1, meta_col);
+                meta_col += @as(u16, @intCast(proj_len)) + 2;
+            }
+        }
+        if (iss.milestone_name) |ms| {
+            if (meta_col + 2 < win.width) {
+                const avail = win.width - meta_col;
+                const ms_len = @min(ms.len, avail);
+                printSeg(win, ms[0..ms_len], style_dim, 1, meta_col);
+            }
         }
     }
 

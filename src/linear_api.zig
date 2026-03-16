@@ -21,6 +21,34 @@ const IssuesResponseJson = struct {
     },
 };
 
+const LeadProjectIssuesResponseJson = struct {
+    data: struct {
+        projects: struct {
+            nodes: []const ProjectNodeJson,
+        },
+    },
+};
+
+const LeadProjectIssueNodeJson = struct {
+    id: []const u8,
+    identifier: []const u8,
+    title: []const u8,
+    updatedAt: []const u8,
+    state: struct {
+        name: []const u8,
+        type: []const u8,
+    },
+    priority: ?u8 = null,
+    priorityLabel: ?[]const u8 = null,
+};
+
+const ProjectNodeJson = struct {
+    name: []const u8,
+    issues: struct {
+        nodes: []const LeadProjectIssueNodeJson,
+    },
+};
+
 const IssueNodeJson = struct {
     id: []const u8,
     identifier: []const u8,
@@ -32,6 +60,8 @@ const IssueNodeJson = struct {
     },
     priority: ?u8 = null,
     priorityLabel: ?[]const u8 = null,
+    project: ?struct { name: []const u8 } = null,
+    projectMilestone: ?struct { name: []const u8 } = null,
 };
 
 const CommentNodeJson = struct {
@@ -123,17 +153,55 @@ pub fn parseIssuesResponse(allocator: std.mem.Allocator, json: []const u8, works
             .source = .linear,
             .source_id = try allocator.dupe(u8, node.id),
             .source_workspace_idx = workspace_idx,
+            .project_name = if (node.project) |p| try allocator.dupe(u8, p.name) else null,
+            .milestone_name = if (node.projectMilestone) |m| try allocator.dupe(u8, m.name) else null,
         };
     }
 
-    // Sort by updated_at descending (most recently updated first)
+    // Sort by priority (urgent→high→medium→none→low), then updated_at descending
     std.mem.sort(Issue, issues, {}, struct {
         fn cmp(_: void, a: Issue, b: Issue) bool {
+            const a_pri = a.priority_label.sortOrder();
+            const b_pri = b.priority_label.sortOrder();
+            if (a_pri != b_pri) return a_pri < b_pri;
             const a_ts = a.updated_at orelse "";
             const b_ts = b.updated_at orelse "";
             return std.mem.order(u8, a_ts, b_ts) == .gt;
         }
     }.cmp);
+
+    return issues;
+}
+
+pub fn parseLeadProjectIssuesResponse(allocator: std.mem.Allocator, json: []const u8, workspace_idx: usize) ![]Issue {
+    const parsed = try std.json.parseFromSlice(LeadProjectIssuesResponseJson, allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    // Count total issues across all projects
+    var total: usize = 0;
+    for (parsed.value.data.projects.nodes) |project| {
+        total += project.issues.nodes.len;
+    }
+
+    var issues = try allocator.alloc(Issue, total);
+    var idx: usize = 0;
+    for (parsed.value.data.projects.nodes) |project| {
+        for (project.issues.nodes) |node| {
+            issues[idx] = .{
+                .identifier = try allocator.dupe(u8, node.identifier),
+                .title = try allocator.dupe(u8, node.title),
+                .state_name = try allocator.dupe(u8, node.state.name),
+                .state_type = StateType.fromString(node.state.type),
+                .priority_label = PriorityLabel.fromString(node.priorityLabel),
+                .updated_at = try allocator.dupe(u8, node.updatedAt),
+                .source = .linear,
+                .source_id = try allocator.dupe(u8, node.id),
+                .source_workspace_idx = workspace_idx,
+                .project_name = try allocator.dupe(u8, project.name),
+            };
+            idx += 1;
+        }
+    }
 
     return issues;
 }
@@ -242,12 +310,99 @@ pub fn parseCreateResponse(allocator: std.mem.Allocator, json: []const u8) !Issu
 
 pub fn fetchIssues(allocator: std.mem.Allocator, api_key: []const u8, workspace_idx: usize) ![]Issue {
     const query =
-        \\{"query":"{ viewer { assignedIssues(filter: { state: { type: { in: [\"started\", \"unstarted\", \"backlog\"] } } }, orderBy: updatedAt) { nodes { id identifier title updatedAt state { name type } priority priorityLabel } } } }"}
+        \\{"query":"{ viewer { assignedIssues(filter: { state: { type: { in: [\"started\", \"unstarted\", \"backlog\"] } } }, orderBy: updatedAt) { nodes { id identifier title updatedAt state { name type } priority priorityLabel project { name } projectMilestone { name } } } } }"}
     ;
     const response = try http.postJson(allocator, api_url, api_key, query);
     defer allocator.free(response);
 
-    return parseIssuesResponse(allocator, response, workspace_idx);
+    const assigned = try parseIssuesResponse(allocator, response, workspace_idx);
+
+    // Also fetch unassigned issues from projects where viewer is lead
+    const lead_query =
+        \\{"query":"{ projects(filter: { lead: { isMe: { eq: true } }, state: { in: [\"planned\", \"started\", \"paused\"] } }, first: 50) { nodes { name issues(filter: { assignee: { null: true }, state: { type: { in: [\"started\", \"unstarted\", \"backlog\"] } } }) { nodes { id identifier title updatedAt state { name type } priority priorityLabel } } } } }"}
+    ;
+    const lead_response = http.postJson(allocator, api_url, api_key, lead_query) catch {
+        return assigned; // If lead query fails, still return assigned issues
+    };
+    defer allocator.free(lead_response);
+
+    const lead_issues = parseLeadProjectIssuesResponse(allocator, lead_response, workspace_idx) catch {
+        return assigned;
+    };
+
+    if (lead_issues.len == 0) {
+        allocator.free(lead_issues);
+        return assigned;
+    }
+
+    // Deduplicate: skip lead issues already in assigned (by source_id)
+    var unique_count: usize = 0;
+    for (lead_issues) |li| {
+        var found = false;
+        if (li.source_id) |lid| {
+            for (assigned) |ai| {
+                if (ai.source_id) |aid| {
+                    if (std.mem.eql(u8, lid, aid)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!found) {
+            unique_count += 1;
+        }
+    }
+
+    if (unique_count == 0) {
+        for (lead_issues) |li| {
+            issue_mod.freeIssue(allocator, li);
+        }
+        allocator.free(lead_issues);
+        return assigned;
+    }
+
+    // Merge assigned + unique lead issues
+    var merged = try allocator.alloc(Issue, assigned.len + unique_count);
+    @memcpy(merged[0..assigned.len], assigned);
+    var idx: usize = assigned.len;
+    for (lead_issues) |li| {
+        var found = false;
+        if (li.source_id) |lid| {
+            for (assigned) |ai| {
+                if (ai.source_id) |aid| {
+                    if (std.mem.eql(u8, lid, aid)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!found) {
+            merged[idx] = li;
+            idx += 1;
+        } else {
+            issue_mod.freeIssue(allocator, li);
+        }
+    }
+
+    // Free old containers (not the issue data, it's been moved to merged)
+    allocator.free(assigned);
+    allocator.free(lead_issues);
+
+    // Re-sort the merged list
+    std.mem.sort(Issue, merged, {}, struct {
+        fn cmp(_: void, a: Issue, b: Issue) bool {
+            const a_pri = a.priority_label.sortOrder();
+            const b_pri = b.priority_label.sortOrder();
+            if (a_pri != b_pri) return a_pri < b_pri;
+            const a_ts = a.updated_at orelse "";
+            const b_ts = b.updated_at orelse "";
+            return std.mem.order(u8, a_ts, b_ts) == .gt;
+        }
+    }.cmp);
+
+    return merged;
 }
 
 pub fn fetchDescription(allocator: std.mem.Allocator, api_key: []const u8, identifier: []const u8) !DescriptionData {
