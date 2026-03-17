@@ -88,11 +88,27 @@ fn renderList(s: *const State, win: Window) void {
         }
     }
 
-    var row: u16 = 1; // Row 0 is blank
+    const scroll = s.list_scroll_offset;
+    const max_row = if (win.height > 1) win.height - 1 else win.height; // reserve last row for help
+
+    // Virtual row tracks position in the full list layout.
+    var virtual_row: usize = 1; // Row 0 is blank
+
+    // Helper to render a virtual row if it's in the visible window
+    const renderVirtualRow = struct {
+        fn inView(vr: usize, sc: usize, mr: u16) ?u16 {
+            if (vr < sc) return null;
+            const sr = vr - sc;
+            if (sr >= mr) return null;
+            return @intCast(sr);
+        }
+    }.inView;
 
     // "In Progress" header
-    printSeg(win, "  In Progress", style_bold_dim, row, 0);
-    row += 1;
+    if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+        printSeg(win, "  In Progress", style_bold_dim, sr, 0);
+    }
+    virtual_row += 1;
 
     // Track display_index for selected_index mapping
     var display_index: usize = 0;
@@ -100,29 +116,29 @@ fn renderList(s: *const State, win: Window) void {
     // In progress issues
     for (s.issues) |iss| {
         if (!iss.isInProgress()) continue;
-        if (row >= win.height -| 1) break;
-        renderIssueRow(win, &iss, row, display_index == s.selected_index);
-        row += 1;
+        if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+            renderIssueRow(win, &iss, sr, display_index == s.selected_index);
+        }
+        virtual_row += 1;
         display_index += 1;
     }
 
     // Blank row separator
-    if (row < win.height -| 1) {
-        row += 1;
-    }
+    virtual_row += 1;
 
     // "Todo" header
-    if (row < win.height -| 1) {
-        printSeg(win, "  Todo", style_bold_dim, row, 0);
-        row += 1;
+    if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+        printSeg(win, "  Todo", style_bold_dim, sr, 0);
     }
+    virtual_row += 1;
 
     // Todo issues
     for (s.issues) |iss| {
         if (!iss.isTodo()) continue;
-        if (row >= win.height -| 1) break;
-        renderIssueRow(win, &iss, row, display_index == s.selected_index);
-        row += 1;
+        if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+            renderIssueRow(win, &iss, sr, display_index == s.selected_index);
+        }
+        virtual_row += 1;
         display_index += 1;
     }
 

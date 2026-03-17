@@ -70,6 +70,7 @@ pub const State = struct {
     issues: []Issue = &.{},
     selected_index: usize = 0,
     scroll_offset: usize = 0,
+    list_scroll_offset: usize = 0,
     loading: bool = true,
     pending_fetches: u16 = 0,
     detail_loading: bool = false,
@@ -184,6 +185,60 @@ pub const State = struct {
         }
     }
 
+    /// Compute the virtual row for a display_index in the list view.
+    /// Layout: row 0 blank, row 1 "In Progress" header, then issues,
+    /// blank separator, "Todo" header, then todo issues.
+    pub fn listVirtualRow(self: *const State, display_index: usize) usize {
+        var in_progress_count: usize = 0;
+        for (self.issues) |iss| {
+            if (iss.isInProgress()) in_progress_count += 1;
+        }
+        if (display_index < in_progress_count) {
+            // Row 1 = header, issues start at row 2
+            return 2 + display_index;
+        } else {
+            // After in-progress: blank row + "Todo" header = 2 extra rows
+            return 2 + in_progress_count + 2 + (display_index - in_progress_count);
+        }
+    }
+
+    /// Total virtual rows used by the list (including headers and separators, excluding help bar).
+    pub fn listTotalRows(self: *const State) usize {
+        var in_progress_count: usize = 0;
+        var todo_count: usize = 0;
+        for (self.issues) |iss| {
+            if (iss.isInProgress()) in_progress_count += 1;
+            if (iss.isTodo()) todo_count += 1;
+        }
+        // row 0 (blank) + header + issues + blank + header + issues
+        return 2 + in_progress_count + 2 + todo_count;
+    }
+
+    /// Ensure list_scroll_offset keeps the selected item visible.
+    /// When scrolling up to the first item in a section, also reveal the section header.
+    pub fn clampListScroll(self: *State) void {
+        const visible_rows = if (self.rows > 2) self.rows - 1 else 1; // exclude help bar row
+        const selected_row = self.listVirtualRow(self.selected_index);
+
+        // Determine if this is the first item in its section — if so,
+        // the scroll target includes the section header (one row above).
+        var in_progress_count: usize = 0;
+        for (self.issues) |iss| {
+            if (iss.isInProgress()) in_progress_count += 1;
+        }
+        const is_section_first = (self.selected_index == 0) or (self.selected_index == in_progress_count);
+        const scroll_target = if (is_section_first and selected_row > 0) selected_row - 1 else selected_row;
+
+        // If selected is below visible area, scroll down
+        if (selected_row >= self.list_scroll_offset + visible_rows) {
+            self.list_scroll_offset = selected_row - visible_rows + 1;
+        }
+        // If selected (or its section header) is above visible area, scroll up
+        if (scroll_target < self.list_scroll_offset) {
+            self.list_scroll_offset = scroll_target;
+        }
+    }
+
     pub fn findTeamStates(self: *const State, team_id: []const u8) ?[]const event_mod.WorkflowState {
         for (self.team_states_entries[0..self.team_states_count]) |entry_opt| {
             if (entry_opt) |entry| {
@@ -275,6 +330,7 @@ fn handleWinsize(s: State, ws: vaxis.Winsize) UpdateResult {
     var next = s;
     next.rows = ws.rows;
     next.cols = ws.cols;
+    next.clampListScroll();
     return UpdateResult.noEffect(next);
 }
 
@@ -283,6 +339,7 @@ fn clampSelectedIndex(next: *State, saved_key: []const u8) void {
     if (saved_key.len > 0) {
         if (next.displayIndexForKey(saved_key)) |idx| {
             next.selected_index = idx;
+            next.clampListScroll();
             return;
         }
     }
@@ -294,6 +351,7 @@ fn clampSelectedIndex(next: *State, saved_key: []const u8) void {
     } else {
         next.selected_index = 0;
     }
+    next.clampListScroll();
 }
 
 fn handleIssuesFetched(s: State, payload: anytype) UpdateResult {
@@ -303,6 +361,7 @@ fn handleIssuesFetched(s: State, payload: anytype) UpdateResult {
     }
     if (next.pending_fetches == 0) {
         next.loading = false;
+        next.error_msg = null;
     }
 
     // Save selected issue key to stack buffer (old issue data may be freed during merge)
@@ -743,6 +802,7 @@ fn handleListKey(s: State, key: Key) UpdateResult {
         if (len > 0 and next.selected_index < len - 1) {
             next.selected_index += 1;
         }
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
@@ -750,6 +810,7 @@ fn handleListKey(s: State, key: Key) UpdateResult {
         if (next.selected_index > 0) {
             next.selected_index -= 1;
         }
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
@@ -757,11 +818,13 @@ fn handleListKey(s: State, key: Key) UpdateResult {
         if (len > 0) {
             next.selected_index = len - 1;
         }
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
     if (key.matches('g', .{})) {
         next.selected_index = 0;
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
@@ -770,6 +833,7 @@ fn handleListKey(s: State, key: Key) UpdateResult {
             const half = @max(next.rows / 2, 1);
             next.selected_index = @min(next.selected_index + half, len - 1);
         }
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
@@ -780,6 +844,7 @@ fn handleListKey(s: State, key: Key) UpdateResult {
         } else {
             next.selected_index = 0;
         }
+        next.clampListScroll();
         return UpdateResult.noEffect(next);
     }
 
@@ -840,6 +905,7 @@ fn handleListKey(s: State, key: Key) UpdateResult {
     }
 
     if (key.matches('r', .{})) {
+        next.error_msg = "Refreshing...";
         return handlePollTick(next);
     }
 
