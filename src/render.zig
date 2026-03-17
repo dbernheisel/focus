@@ -127,6 +127,25 @@ fn renderList(s: *const State, win: Window) void {
     // Blank row separator
     virtual_row += 1;
 
+    // "In Review" header
+    if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+        printSeg(win, "  In Review", style_bold_dim, sr, 0);
+    }
+    virtual_row += 1;
+
+    // In review issues
+    for (s.issues) |iss| {
+        if (!iss.isInReview()) continue;
+        if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
+            renderIssueRow(win, &iss, sr, display_index == s.selected_index);
+        }
+        virtual_row += 1;
+        display_index += 1;
+    }
+
+    // Blank row separator
+    virtual_row += 1;
+
     // "Todo" header
     if (renderVirtualRow(virtual_row, scroll, max_row)) |sr| {
         printSeg(win, "  Todo", style_bold_dim, sr, 0);

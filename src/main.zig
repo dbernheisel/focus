@@ -253,9 +253,19 @@ fn runListMode(allocator: std.mem.Allocator) noreturn {
         }
     }
 
-    // Sort: priority (urgent→high→medium→none→low), then updated_at descending
+    // Sort: section (in-progress, in-review, todo), then priority, then updated_at descending
     std.mem.sort(issue_mod.Issue, all_issues.items, {}, struct {
+        fn sectionOrder(iss: issue_mod.Issue) u8 {
+            if (iss.isInProgress()) return 0;
+            if (iss.isInReview()) return 1;
+            if (iss.isTodo()) return 2;
+            return 3;
+        }
+
         fn cmp(_: void, a: issue_mod.Issue, b: issue_mod.Issue) bool {
+            const a_sec = sectionOrder(a);
+            const b_sec = sectionOrder(b);
+            if (a_sec != b_sec) return a_sec < b_sec;
             const a_pri = a.priority_label.sortOrder();
             const b_pri = b.priority_label.sortOrder();
             if (a_pri != b_pri) return a_pri < b_pri;

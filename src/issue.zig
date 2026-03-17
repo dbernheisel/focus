@@ -85,8 +85,12 @@ pub const Issue = struct {
         return self.source_id orelse self.identifier;
     }
 
+    pub fn isInReview(self: Issue) bool {
+        return self.state_type == .started and std.mem.eql(u8, self.state_name, "In Review");
+    }
+
     pub fn isInProgress(self: Issue) bool {
-        return self.state_type == .started;
+        return self.state_type == .started and !self.isInReview();
     }
 
     pub fn isTodo(self: Issue) bool {
@@ -179,22 +183,36 @@ test "StateType.fromString parses correctly" {
     try testing.expectEqual(StateType.backlog, StateType.fromString("unknown"));
 }
 
-test "isInProgress and isTodo grouping helpers" {
+test "isInProgress, isInReview, and isTodo grouping helpers" {
     var iss = makeIssue();
 
     iss.state_type = .started;
+    iss.state_name = "In Progress";
     try testing.expect(iss.isInProgress());
+    try testing.expect(!iss.isInReview());
+    try testing.expect(!iss.isTodo());
+
+    iss.state_type = .started;
+    iss.state_name = "In Review";
+    try testing.expect(!iss.isInProgress());
+    try testing.expect(iss.isInReview());
     try testing.expect(!iss.isTodo());
 
     iss.state_type = .unstarted;
+    iss.state_name = "Todo";
     try testing.expect(!iss.isInProgress());
+    try testing.expect(!iss.isInReview());
     try testing.expect(iss.isTodo());
 
     iss.state_type = .backlog;
+    iss.state_name = "Backlog";
     try testing.expect(!iss.isInProgress());
+    try testing.expect(!iss.isInReview());
     try testing.expect(iss.isTodo());
 
     iss.state_type = .completed;
+    iss.state_name = "Done";
     try testing.expect(!iss.isInProgress());
+    try testing.expect(!iss.isInReview());
     try testing.expect(!iss.isTodo());
 }

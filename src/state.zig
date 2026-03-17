@@ -97,11 +97,17 @@ pub const State = struct {
     team_states_entries: [MAX_TEAM_STATES]?TeamStateEntry = [_]?TeamStateEntry{null} ** MAX_TEAM_STATES,
     team_states_count: usize = 0,
 
-    /// Returns the issue at the given display index (in-progress first, then todo).
+    /// Returns the issue at the given display index (in-progress first, then in-review, then todo).
     fn issueAtDisplayIndex(self: *const State, target: usize) ?*const Issue {
         var display_idx: usize = 0;
         for (self.issues, 0..) |_, i| {
             if (self.issues[i].isInProgress()) {
+                if (display_idx == target) return &self.issues[i];
+                display_idx += 1;
+            }
+        }
+        for (self.issues, 0..) |_, i| {
+            if (self.issues[i].isInReview()) {
                 if (display_idx == target) return &self.issues[i];
                 display_idx += 1;
             }
@@ -119,11 +125,11 @@ pub const State = struct {
         return self.issueAtDisplayIndex(self.selected_index);
     }
 
-    /// Count of visible issues (in-progress + todo, excludes completed).
+    /// Count of visible issues (in-progress + in-review + todo, excludes completed).
     pub fn displayCount(self: *const State) usize {
         var count: usize = 0;
         for (self.issues) |iss| {
-            if (iss.isInProgress() or iss.isTodo()) count += 1;
+            if (iss.isInProgress() or iss.isInReview() or iss.isTodo()) count += 1;
         }
         return count;
     }
@@ -133,6 +139,12 @@ pub const State = struct {
         var display_idx: usize = 0;
         for (self.issues) |iss| {
             if (iss.isInProgress()) {
+                if (std.mem.eql(u8, iss.key(), target_key)) return display_idx;
+                display_idx += 1;
+            }
+        }
+        for (self.issues) |iss| {
+            if (iss.isInReview()) {
                 if (std.mem.eql(u8, iss.key(), target_key)) return display_idx;
                 display_idx += 1;
             }
@@ -187,31 +199,39 @@ pub const State = struct {
 
     /// Compute the virtual row for a display_index in the list view.
     /// Layout: row 0 blank, row 1 "In Progress" header, then issues,
+    /// blank separator, "In Review" header, then review issues,
     /// blank separator, "Todo" header, then todo issues.
     pub fn listVirtualRow(self: *const State, display_index: usize) usize {
         var in_progress_count: usize = 0;
+        var in_review_count: usize = 0;
         for (self.issues) |iss| {
             if (iss.isInProgress()) in_progress_count += 1;
+            if (iss.isInReview()) in_review_count += 1;
         }
         if (display_index < in_progress_count) {
             // Row 1 = header, issues start at row 2
             return 2 + display_index;
-        } else {
-            // After in-progress: blank row + "Todo" header = 2 extra rows
+        } else if (display_index < in_progress_count + in_review_count) {
+            // After in-progress: blank row + "In Review" header = 2 extra rows
             return 2 + in_progress_count + 2 + (display_index - in_progress_count);
+        } else {
+            // After in-review: blank row + "Todo" header = 2 extra rows
+            return 2 + in_progress_count + 2 + in_review_count + 2 + (display_index - in_progress_count - in_review_count);
         }
     }
 
     /// Total virtual rows used by the list (including headers and separators, excluding help bar).
     pub fn listTotalRows(self: *const State) usize {
         var in_progress_count: usize = 0;
+        var in_review_count: usize = 0;
         var todo_count: usize = 0;
         for (self.issues) |iss| {
             if (iss.isInProgress()) in_progress_count += 1;
+            if (iss.isInReview()) in_review_count += 1;
             if (iss.isTodo()) todo_count += 1;
         }
-        // row 0 (blank) + header + issues + blank + header + issues
-        return 2 + in_progress_count + 2 + todo_count;
+        // row 0 (blank) + header + issues + blank + header + issues + blank + header + issues
+        return 2 + in_progress_count + 2 + in_review_count + 2 + todo_count;
     }
 
     /// Ensure list_scroll_offset keeps the selected item visible.
