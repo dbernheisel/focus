@@ -253,6 +253,18 @@ fn runListMode(allocator: std.mem.Allocator) noreturn {
         }
     }
 
+    // Sort: priority (urgent→high→medium→none→low), then updated_at descending
+    std.mem.sort(issue_mod.Issue, all_issues.items, {}, struct {
+        fn cmp(_: void, a: issue_mod.Issue, b: issue_mod.Issue) bool {
+            const a_pri = a.priority_label.sortOrder();
+            const b_pri = b.priority_label.sortOrder();
+            if (a_pri != b_pri) return a_pri < b_pri;
+            const a_ts = a.updated_at orelse "";
+            const b_ts = b.updated_at orelse "";
+            return std.mem.order(u8, a_ts, b_ts) == .gt;
+        }
+    }.cmp);
+
     // Write JSON to stdout
     writeListJson(allocator, all_issues.items) catch {
         stderr.writeAll("Error: failed to write to stdout\n") catch {};
