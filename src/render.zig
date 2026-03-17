@@ -25,6 +25,7 @@ const style_h3: Style = .{ .bold = true };
 const style_green: Style = .{ .fg = .{ .index = 2 } };
 const style_code: Style = .{ .fg = .{ .index = 2 } }; // green for code fences
 const style_link: Style = .{ .fg = .{ .index = 6 }, .ul_style = .single }; // cyan + underline
+const style_table_border: Style = .{ .dim = true };
 
 const Cell = vaxis.Cell;
 const Hyperlink = Cell.Hyperlink;
@@ -295,6 +296,27 @@ pub fn countDescriptionLines(iss: *const issue_mod.Issue, content_width: u16) us
             while (line_iter.next()) |line| {
                 if (line.len == 0 or std.mem.startsWith(u8, line, "```")) {
                     total += 1;
+                } else if (isTableLine(line)) {
+                    // Collect consecutive table lines
+                    var table_buf: [64][]const u8 = undefined;
+                    var table_count: usize = 0;
+                    table_buf[table_count] = line;
+                    table_count += 1;
+                    while (table_count < 64) {
+                        const saved = line_iter;
+                        if (line_iter.next()) |next_line| {
+                            if (isTableLine(next_line) or isTableSeparator(next_line)) {
+                                table_buf[table_count] = next_line;
+                                table_count += 1;
+                            } else {
+                                line_iter = saved;
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    total += countTableLines(table_buf[0..table_count]);
                 } else {
                     const content = if (std.mem.startsWith(u8, line, "### "))
                         line[4..]
@@ -331,6 +353,174 @@ pub fn countDescriptionLines(iss: *const issue_mod.Issue, content_width: u16) us
     }
 
     return total;
+}
+
+/// Check if a line is a markdown table row (starts with | and has at least 2 pipes).
+fn isTableLine(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " ");
+    if (trimmed.len < 3 or trimmed[0] != '|') return false;
+    // Must have at least 2 pipes to be a table row
+    var pipe_count: usize = 0;
+    for (trimmed) |ch| {
+        if (ch == '|') pipe_count += 1;
+        if (pipe_count >= 2) return true;
+    }
+    return false;
+}
+
+/// Check if a line is a markdown table separator (e.g. |---|---|).
+fn isTableSeparator(line: []const u8) bool {
+    const trimmed = std.mem.trim(u8, line, " ");
+    if (trimmed.len < 3 or trimmed[0] != '|') return false;
+    for (trimmed) |ch| {
+        if (ch != '|' and ch != '-' and ch != ':' and ch != ' ') return false;
+    }
+    return true;
+}
+
+/// Parse a table row into cells by splitting on '|'. Trims leading/trailing pipes and whitespace.
+/// Returns the number of cells written into the output buffer.
+fn parseTableCells(line: []const u8, cells: *[16][]const u8) usize {
+    var count: usize = 0;
+    const trimmed = std.mem.trim(u8, line, " ");
+
+    // Strip leading and trailing '|'
+    var inner = trimmed;
+    if (inner.len > 0 and inner[0] == '|') inner = inner[1..];
+    if (inner.len > 0 and inner[inner.len - 1] == '|') inner = inner[0 .. inner.len - 1];
+
+    var iter = std.mem.splitScalar(u8, inner, '|');
+    while (iter.next()) |cell| {
+        if (count >= 16) break;
+        cells[count] = std.mem.trim(u8, cell, " ");
+        count += 1;
+    }
+    return count;
+}
+
+/// Render a markdown table block. Returns the number of display lines consumed.
+/// `table_lines` should include the header, separator, and data rows.
+fn renderTable(
+    win: Window,
+    table_lines: []const []const u8,
+    row_start: u16,
+    max_row: u16,
+    scroll_offset: usize,
+    display_line_start: usize,
+    start_col: u16,
+) struct { rows_used: u16, display_lines: usize } {
+    if (table_lines.len == 0) return .{ .rows_used = 0, .display_lines = 0 };
+
+    // First pass: parse all rows and compute max column widths
+    var all_cells: [64][16][]const u8 = undefined;
+    var all_counts: [64]usize = undefined;
+    var num_rows: usize = 0;
+    var num_cols: usize = 0;
+    var col_widths: [16]usize = .{0} ** 16;
+    var separator_idx: ?usize = null;
+
+    for (table_lines, 0..) |line, i| {
+        if (num_rows >= 64) break;
+        if (isTableSeparator(line)) {
+            separator_idx = i;
+            continue;
+        }
+        all_counts[num_rows] = parseTableCells(line, &all_cells[num_rows]);
+        const count = all_counts[num_rows];
+        if (count > num_cols) num_cols = count;
+        for (0..count) |c| {
+            const vis_len = displayLength(all_cells[num_rows][c]);
+            if (vis_len > col_widths[c]) {
+                col_widths[c] = vis_len;
+            }
+        }
+        num_rows += 1;
+    }
+
+    if (num_rows == 0 or num_cols == 0) return .{ .rows_used = 0, .display_lines = 0 };
+
+    // Render rows
+    var row = row_start;
+    var display_line = display_line_start;
+    // Total display lines = num_rows + 1 (for separator line under header)
+    const has_header = separator_idx != null and num_rows > 0;
+
+    for (0..num_rows) |r| {
+        // After the first row (header), render separator
+        if (r == 1 and has_header) {
+            if (display_line >= scroll_offset and row < max_row) {
+                var col: u16 = start_col;
+                for (0..num_cols) |c| {
+                    const w: u16 = @intCast(col_widths[c] + 2); // 1 padding each side
+                    // Draw horizontal line
+                    var x: u16 = 0;
+                    while (x < w) : (x += 1) {
+                        if (col + x < win.width) {
+                            printSeg(win, "\xe2\x94\x80", style_table_border, row, col + x); // ─
+                        }
+                    }
+                    col += w;
+                    // Draw cross or nothing at column boundary
+                    if (c + 1 < num_cols and col < win.width) {
+                        printSeg(win, "\xe2\x94\xbc", style_table_border, row, col); // ┼
+                        col += 1;
+                    }
+                }
+                row += 1;
+            }
+            display_line += 1;
+        }
+
+        if (row >= max_row) break;
+
+        // Render data row
+        if (display_line >= scroll_offset and row < max_row) {
+            const is_header = r == 0 and has_header;
+            const cell_style: Style = if (is_header) style_bold else .{};
+            var col: u16 = start_col;
+            const count = all_counts[r];
+
+            for (0..num_cols) |c| {
+                const w: u16 = @intCast(col_widths[c] + 2); // 1 padding each side
+                const cell_text = if (c < count) all_cells[r][c] else "";
+                // Print space + styled text
+                if (col + 1 < win.width) {
+                    printSeg(win, " ", cell_style, row, col);
+                    if (cell_text.len > 0 and col + 1 < win.width) {
+                        renderStyledLine(win, cell_text, row, col + 1, cell_style);
+                    }
+                }
+                col += w;
+                // Draw vertical separator
+                if (c + 1 < num_cols and col < win.width) {
+                    printSeg(win, "\xe2\x94\x82", style_table_border, row, col); // │
+                    col += 1;
+                }
+            }
+            row += 1;
+        }
+        display_line += 1;
+    }
+
+    return .{
+        .rows_used = row - row_start,
+        .display_lines = display_line - display_line_start,
+    };
+}
+
+/// Count the display lines a table block would occupy.
+fn countTableLines(table_lines: []const []const u8) usize {
+    var data_rows: usize = 0;
+    var has_separator = false;
+    for (table_lines) |line| {
+        if (isTableSeparator(line)) {
+            has_separator = true;
+        } else {
+            data_rows += 1;
+        }
+    }
+    // data rows + 1 separator line (if present)
+    return data_rows + (if (has_separator) @as(usize, 1) else 0);
 }
 
 fn renderDescription(s: *const State, win: Window, iss: *const issue_mod.Issue) void {
@@ -382,6 +572,44 @@ fn renderDescription(s: *const State, win: Window, iss: *const issue_mod.Issue) 
                 if (line.len == 0) {
                     if (display_line >= s.scroll_offset and row < max_row) row += 1;
                     display_line += 1;
+                    continue;
+                }
+
+                // Markdown table: collect consecutive table lines and render as block
+                if (isTableLine(line)) {
+                    var table_buf: [64][]const u8 = undefined;
+                    var table_count: usize = 0;
+                    table_buf[table_count] = line;
+                    table_count += 1;
+
+                    // Peek ahead for more table lines
+                    while (table_count < 64) {
+                        const saved = line_iter;
+                        if (line_iter.next()) |next_line| {
+                            if (isTableLine(next_line) or isTableSeparator(next_line)) {
+                                table_buf[table_count] = next_line;
+                                table_count += 1;
+                            } else {
+                                // Not a table line - restore iterator
+                                line_iter = saved;
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    const result = renderTable(
+                        win,
+                        table_buf[0..table_count],
+                        row,
+                        max_row,
+                        s.scroll_offset,
+                        display_line,
+                        2,
+                    );
+                    row += result.rows_used;
+                    display_line += result.display_lines;
                     continue;
                 }
 
@@ -1055,4 +1283,56 @@ test "render with real screen for loading state" {
     if (screen.readCell(3, 1)) |cell| {
         try testing.expectEqualStrings("o", cell.char.grapheme);
     }
+}
+
+test "isTableLine detects table rows" {
+    try testing.expect(isTableLine("| a | b |"));
+    try testing.expect(isTableLine("| a | b"));
+    try testing.expect(isTableLine("|a|b|"));
+    try testing.expect(!isTableLine("not a table"));
+    try testing.expect(!isTableLine("|single pipe only"));
+    try testing.expect(!isTableLine(""));
+}
+
+test "isTableSeparator detects separator rows" {
+    try testing.expect(isTableSeparator("|---|---|"));
+    try testing.expect(isTableSeparator("| --- | --- |"));
+    try testing.expect(isTableSeparator("|:---:|:---:|"));
+    try testing.expect(!isTableSeparator("| a | b |"));
+    try testing.expect(!isTableSeparator("not a separator"));
+}
+
+test "parseTableCells splits correctly" {
+    var cells: [16][]const u8 = undefined;
+
+    const count1 = parseTableCells("| Header 1 | Header 2 | Header 3 |", &cells);
+    try testing.expectEqual(@as(usize, 3), count1);
+    try testing.expectEqualStrings("Header 1", cells[0]);
+    try testing.expectEqualStrings("Header 2", cells[1]);
+    try testing.expectEqualStrings("Header 3", cells[2]);
+
+    const count2 = parseTableCells("|a|b|", &cells);
+    try testing.expectEqual(@as(usize, 2), count2);
+    try testing.expectEqualStrings("a", cells[0]);
+    try testing.expectEqualStrings("b", cells[1]);
+}
+
+test "countTableLines counts correctly" {
+    const lines = [_][]const u8{
+        "| a | b |",
+        "|---|---|",
+        "| 1 | 2 |",
+        "| 3 | 4 |",
+    };
+    // 3 data rows + 1 separator = 4 display lines
+    try testing.expectEqual(@as(usize, 4), countTableLines(&lines));
+}
+
+test "countTableLines without separator" {
+    const lines = [_][]const u8{
+        "| a | b |",
+        "| 1 | 2 |",
+    };
+    // 2 data rows, no separator = 2 display lines
+    try testing.expectEqual(@as(usize, 2), countTableLines(&lines));
 }
