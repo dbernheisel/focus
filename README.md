@@ -1,6 +1,6 @@
 # Focus
 
-A terminal UI for viewing your assigned Linear issues, keeping you focused on what to work on next. Built with Zig and [libvaxis](https://github.com/grimlockOS/libvaxis).
+A terminal UI for viewing your assigned Linear issues, keeping you focused on what to work on next. Built with Zig and [libvaxis](https://github.com/rockorager/libvaxis).
 
 ## Features
 
