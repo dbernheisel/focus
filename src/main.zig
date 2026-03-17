@@ -8,6 +8,7 @@ const issue_mod = @import("issue.zig");
 const linear_api = @import("linear_api.zig");
 const notion_api = @import("notion_api.zig");
 
+const notify = @import("notify.zig");
 const log = @import("log.zig");
 
 const Event = event_mod.Event;
@@ -133,6 +134,19 @@ pub fn main() !void {
         switch (event) {
             .winsize => |ws| {
                 try vx.resize(allocator, tty.writer(), ws);
+            },
+            else => {},
+        }
+
+        // Notifications and state file updates
+        switch (event) {
+            .issues_fetched => {
+                if (app_state.pending_fetches == 0) {
+                    notify.writeStateFile(app_state.issues);
+                }
+            },
+            .poll_tick => {
+                notify.sendNotification(app_state.issues);
             },
             else => {},
         }
@@ -497,6 +511,7 @@ comptime {
     _ = @import("linear_api.zig");
     _ = @import("notion_api.zig");
     _ = @import("render.zig");
+    _ = @import("notify.zig");
 }
 
 test "smoke" {
