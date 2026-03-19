@@ -49,9 +49,9 @@ pub fn sendNotification(issues: []const issue_mod.Issue) void {
         .osc777 => blk: {
             if (tmux) {
                 // tmux DCS passthrough: \ePtmux;\e{doubled-ESC sequence}\e\\
-                break :blk std.fmt.bufPrint(&buf, "\x1bPtmux;\x1b\x1b]777;notify;Focus;{s} {s}\x1b\x1b\\\x1b\\", .{ iss.identifier, iss.title }) catch return;
+                break :blk std.fmt.bufPrint(&buf, "\x1bPtmux;\x1b\x1b]777;notify;{s};{s}\x1b\x1b\\\x1b\\", .{ iss.title, iss.identifier }) catch return;
             } else {
-                break :blk std.fmt.bufPrint(&buf, "\x1b]777;notify;Focus;{s} {s}\x1b\\", .{ iss.identifier, iss.title }) catch return;
+                break :blk std.fmt.bufPrint(&buf, "\x1b]777;notify;{s};{s}\x1b\\", .{ iss.title, iss.identifier }) catch return;
             }
         },
         .osc9 => blk: {

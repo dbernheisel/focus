@@ -276,14 +276,14 @@ fn runListMode(allocator: std.mem.Allocator) noreturn {
     }.cmp);
 
     // Write JSON to stdout
-    writeListJson(allocator, all_issues.items) catch {
+    writeListJson(allocator, all_issues.items, cfg.linear) catch {
         stderr.writeAll("Error: failed to write to stdout\n") catch {};
         std.process.exit(1);
     };
     std.process.exit(0);
 }
 
-fn writeListJson(allocator: std.mem.Allocator, issues: []const issue_mod.Issue) !void {
+fn writeListJson(allocator: std.mem.Allocator, issues: []const issue_mod.Issue, linear_workspaces: []const config_mod.LinearWorkspace) !void {
     // Build JSON string in memory, then write all at once
     var buf: std.ArrayList(u8) = .{};
     defer buf.deinit(allocator);
@@ -307,7 +307,16 @@ fn writeListJson(allocator: std.mem.Allocator, issues: []const issue_mod.Issue) 
 
         try writer.print("    \"state_type\": \"{s}\",\n", .{stateTypeString(issue.state_type)});
 
-        try writer.print("    \"priority_label\": \"{s}\"\n", .{priorityLabelString(issue.priority_label)});
+        try writer.print("    \"priority_label\": \"{s}\",\n", .{priorityLabelString(issue.priority_label)});
+
+        // Resolve workspace slug from the issue's source_workspace_idx
+        const ws_slug: []const u8 = if (issue.source_workspace_idx) |idx|
+            if (idx < linear_workspaces.len) linear_workspaces[idx].workspace else ""
+        else
+            "";
+        try writer.writeAll("    \"workspace\": \"");
+        try writeJsonEscaped(writer, ws_slug);
+        try writer.writeAll("\"\n");
 
         if (i < issues.len - 1) {
             try writer.writeAll("  },\n");
